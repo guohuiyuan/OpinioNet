@@ -1,4 +1,4 @@
-from pytorch_pretrained_bert import BertTokenizer
+from transformers import BertTokenizer
 from dataset import ReviewDataset, get_data_loaders
 from model import OpinioNet
 

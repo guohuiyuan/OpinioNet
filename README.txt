@@ -67,3 +67,7 @@
             2. 0.8109 -- 复赛单模型CV    9月27
           * 3. 0.8224 -- 复赛集成模型CV   9月28
             4. 0.8218 -- 微调使用数据扩增，效果不好  9月30
+
+
+screen -L -Logfile test.log -dmS test bash -c "/new_disk/med_group/ghy/miniconda3/bin/python /new_disk/med_group/ghy/code/OpinioNet/llm_predict.py --mode test"
+screen -L -Logfile train.log -dmS train bash -c "/new_disk/med_group/ghy/miniconda3/bin/python /new_disk/med_group/ghy/code/OpinioNet/llm_predict.py --mode train"

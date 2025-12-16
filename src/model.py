@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_pretrained_bert.modeling import BertPreTrainedModel, BertOnlyMLMHead
-from pytorch_pretrained_bert import BertModel, BertAdam, BertConfig
+from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertOnlyMLMHead
+from transformers import BertModel, BertConfig
 
 from dataset import ID2P, ID2COMMON, ID2MAKUP, ID2LAPTOP
 import numpy as np
@@ -132,8 +132,10 @@ class OpinioNet(BertPreTrainedModel):
 
 
 	def foward_LM(self, input_ids, attention_mask=None, masked_lm_labels=None):
-		sequence_output, _ = self.bert(input_ids, None, attention_mask,
-									   output_all_encoded_layers=False)
+		# output_hidden_states=False 表示只返回最后一层隐藏状态
+		outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask,
+								output_hidden_states=False)
+		sequence_output = outputs.last_hidden_state  # 获取最后一层隐藏状态
 		prediction_scores = self.cls(sequence_output)
 
 		if masked_lm_labels is not None:
@@ -200,9 +202,9 @@ class OpinioNet(BertPreTrainedModel):
 	def forward(self, input, type='laptop'):
 		rv_seq, att_mask, rv_mask = input
 
-		rv_seq, cls_emb = self.bert(input_ids=rv_seq, attention_mask=att_mask, output_all_encoded_layers=False)
-
-
+		outputs = self.bert(input_ids=rv_seq, attention_mask=att_mask, output_hidden_states=False)
+		rv_seq = outputs.last_hidden_state  # 句子序列的隐藏状态
+		cls_emb = outputs.pooler_output     # [CLS] token的输出（池化后）
 
 		as_logits, ae_logits, os_logits, oe_logits, obj_logits, c_logits, p_logits = self._forward_large(rv_seq, type)
 		if self.version == 'tiny':
@@ -493,7 +495,7 @@ class OpinioNet(BertPreTrainedModel):
 
 
 if __name__ == '__main__':
-	from pytorch_pretrained_bert import BertTokenizer
+	from transformers import BertTokenizer
 	from dataset import ReviewDataset
 
 	tokenizer = BertTokenizer.from_pretrained('/home/zydq/.torch/models/bert/ERNIE',
