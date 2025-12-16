@@ -3,314 +3,293 @@ import asyncio
 import json
 import re
 import sys
-from openai import AsyncOpenAI
-from tqdm.asyncio import tqdm
 import os
 import argparse
+from typing import List, Tuple, Set, Literal
+from dataclasses import dataclass, asdict
+from openai import AsyncOpenAI
+from tqdm.asyncio import tqdm
+from pydantic import BaseModel, ValidationError, constr
 
 # ================= 配置区域 =================
-# 请用您的 vLLM 服务地址替换下面的占位符
+
+# vLLM 服务配置
 VLLM_API_BASE = "http://10.249.42.129:8863/v1"
 VLLM_API_KEY = "apikey"
 MODEL_NAME = "qwen3_8b"
 
-CONCURRENCY_LIMIT = 1
+# 并发控制
+CONCURRENCY_LIMIT = 10  # 根据你的显存情况调整，vLLM通常可以承载较高并发
 
+# 逻辑约束 (来自 predict_acos.py)
+CATEGORIES = ["包装","成分","尺寸","服务","功效","价格","气味","使用体验","物流","新鲜度","真伪","整体","其他"]
+POLARITIES = ["正面","中性","负面"]
 
-def get_prompt(text, categories):
-    return f"""你是一个专业的评论分析师。
-你的任务是从给定的评论文本中，识别出所有的方面（AspectTerms）、观点（OpinionTerms）、类别（Categories）和情感极性（Polarities）。
+DEFAULT_SYSTEM_PROMPT = """你是一个专业的中文电商化妆品评论观点四元组抽取助手。
+任务：给定一条化妆品电商评论文本，抽取其中所有的观点四元组（AspectTerm, OpinionTerm, Category, Polarity），即 ACOS 四元组。
 
-你需要遵循以下规则：
-1.  **输出格式**: 必须严格按照 JSON 格式输出，返回一个对象列表。每个对象包含四个字段: "AspectTerms", "OpinionTerms", "Categories", "Polarities"。**注意：所有字段的值必须是字符串，不能是列表。**
-2.  **内容提取**:
-    * `AspectTerms`: 评论中提到的具体方面。如果评论没有明确提到方面（是隐式的），请填写"_"。
-    * `OpinionTerms`: 表达观点的词语。
-    * `Categories`: 从以下列表中选择最合适的类别: {', '.join(categories)}。
-    * `Polarities`: 情感极性，必须是 "正面"、"负面" 或 "中性" 之一。
-3.  **颗粒度**: 如果一句话包含多个观点（例如“屏幕好但电池差”），请将其拆分为两个独立的对象分别列出。
-4.  **无观点**: 如果评论中没有表达任何观点，请返回一个空列表 `[]`。
-
-**评论文本**:
-"{text}"
-
-**输出 (JSON格式)**:
+严格遵守：
+1. 输出唯一 JSON：{"quadruples":[{"aspect":"...","opinion":"...","category":"...","polarity":"..."}, ...]}
+2. quadruples 为数组；若没有观点，输出 {"quadruples":[]}
+3. aspect：若无显式属性词用 "_"；原文中出现的需与原文一致；不添加空格。
+4. opinion：必须是原文中连续片段；保持原字符；无观点不输出该条。
+5. category 取值必须在 {包装, 成分, 尺寸, 服务, 功效, 价格, 气味, 使用体验, 物流, 新鲜度, 真伪, 整体, 其他}
+6. polarity 取值必须在 {正面, 中性, 负面}
+7. 不得出现与原文无关或臆造的词；不得输出解释文字；不得添加多余字段。
+8. 去重：同一 (aspect, opinion, category, polarity) 只保留一个。
+9. 排序：按 opinion 在原文首次出现位置升序；若相同再按 aspect（"_" 视为 +∞）。
+10. 只输出 JSON，不输出其它任何文本。
 """
 
+# ================= Pydantic 模型 (用于严格校验) =================
 
-def parse_llm_output(response_text):
+class Quadruple(BaseModel):
+    aspect: constr(strip_whitespace=True)
+    opinion: constr(strip_whitespace=True, min_length=1)
+    category: Literal["包装","成分","尺寸","服务","功效","价格","气味","使用体验","物流","新鲜度","真伪","整体","其他"]
+    polarity: Literal["正面","中性","负面"]
+
+class QuadrupleList(BaseModel):
+    quadruples: List[Quadruple]
+
+# ================= 核心逻辑函数 =================
+
+def extract_json_block(text: str) -> str:
+    """提取 JSON 文本块"""
+    text = text.strip()
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    m = re.search(r'\{.*\}', text, flags=re.DOTALL)
+    if m:
+        return m.group(0)
+    return text
+
+def validate_and_repair(json_str: str, original_text: str) -> List[dict]:
+    """
+    逻辑核心：解析、校验、去重、排序
+    返回的是字典列表，方便序列化
+    """
     try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        match = re.search(r"```json\n(.*?)```", response_text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                return []
+        obj = json.loads(json_str)
+    except Exception:
         return []
 
-def clean_item(item):
-    """
-    清洗模型输出，使其符合标准答案的格式
-    """
-    # 1. 清洗 AspectTerms
-    aspect = item.get("AspectTerms", "_")
-    if isinstance(aspect, list):
-        aspect = " ".join([str(x) for x in aspect]) if aspect else "_"
-    # 将 "整体" 或 "None" 映射为标准答案中的 "_"
-    if str(aspect).strip() in ["整体", "None", "null", "N/A"]:
-        aspect = "_"
-    item["AspectTerms"] = str(aspect).strip()
+    if not isinstance(obj, dict):
+        return []
+    
+    items = obj.get("quadruples", [])
+    if not isinstance(items, list):
+        return []
 
-    # 2. 清洗 OpinionTerms
-    opinion = item.get("OpinionTerms", "_")
-    if isinstance(opinion, list):
-        opinion = " ".join([str(x) for x in opinion]) if opinion else "_"
-    if str(opinion).strip() in ["None", "null", "N/A", "[]"]:
-        opinion = "_"
-    item["OpinionTerms"] = str(opinion).strip()
+    cleaned = []
+    seen: Set[Tuple[str,str,str,str]] = set()
 
-    # 3. 清洗 Categories
-    cat = item.get("Categories", "整体")
-    if isinstance(cat, list):
-        cat = ",".join([str(x) for x in cat]) if cat else "整体"
-    item["Categories"] = str(cat).strip()
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        
+        aspect = (it.get("aspect") or "").strip()
+        if aspect == "" or aspect.lower() in ["none", "null", "n/a"]:
+            aspect = "_"
+        
+        opinion = (it.get("opinion") or "").strip()
+        category = (it.get("category") or "").strip()
+        polarity = (it.get("polarity") or "").strip()
 
-    # 4. 清洗 Polarities
-    pol = item.get("Polarities", "中性")
-    if isinstance(pol, list):
-        pol = ",".join([str(x) for x in pol]) if pol else "中性"
-    item["Polarities"] = str(pol).strip()
+        # 基本逻辑过滤
+        if not opinion or opinion.lower() in ["none", "null", "_", ""]:
+            continue
+        if category not in CATEGORIES:
+            # 尝试简单修复，如果失败则丢弃
+            if category == "_": category = "整体" 
+            else: continue
+        if polarity not in POLARITIES:
+            if polarity == "_": polarity = "中性"
+            else: continue
 
-    return item
+        # 去重 Key
+        key = (aspect, opinion, category, polarity)
+        if key in seen:
+            continue
+        seen.add(key)
 
-async def get_extraction(client, text, categories, semaphore, row_id, progress_file):
+        cleaned.append({
+            "aspect": aspect,
+            "opinion": opinion,
+            "category": category,
+            "polarity": polarity
+        })
+
+    # 排序辅助函数
+    def first_pos(opinion: str) -> int:
+        idx = original_text.find(opinion)
+        return idx if idx >= 0 else 10**9
+
+    def aspect_pos(aspect: str) -> int:
+        if aspect == "_":
+            return 10**9
+        idx = original_text.find(aspect)
+        return idx if idx >= 0 else 10**9 - 1
+
+    # 排序：先按 opinion 出现位置，再按 aspect 出现位置
+    cleaned.sort(key=lambda x: (first_pos(x["opinion"]), aspect_pos(x["aspect"])))
+
+    try:
+        # 使用 Pydantic 进行最终校验
+        qlist = QuadrupleList(quadruples=[Quadruple(**c) for c in cleaned])
+        # 转回 dict 用于 JSON 序列化
+        return [q.model_dump() for q in qlist.quadruples]
+    except ValidationError:
+        return []
+
+# ================= 异步任务 =================
+
+async def get_extraction(client, text, semaphore, row_id, progress_file):
     async with semaphore:
+        # 构造用户输入
+        user_content = f"请抽取 ACOS 四元组。\n评论ID: {row_id}\n评论文本: {text}\n严格只输出一个 JSON 对象。"
+        
         try:
-            prompt = get_prompt(text, categories)
             response = await client.chat.completions.create(
                 model=MODEL_NAME,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content}
+                ],
                 temperature=0.0,
-                max_tokens=1024,
+                max_tokens=512, # ACOS 提取不需要太长
+                response_format={"type": "json_object"} # 如果 vLLM 支持 json_object 最好，不支持也不影响
             )
 
-            response_text = response.choices[0].message.content
-            parsed_output = parse_llm_output(response_text)
+            raw_content = response.choices[0].message.content
+            json_candidate = extract_json_block(raw_content)
+            
+            # 使用移植过来的核心逻辑进行处理
+            quadruples = validate_and_repair(json_candidate, text)
 
-            # 增强健壮性处理
-            if isinstance(parsed_output, dict):
-                parsed_output = [parsed_output]
-            if not isinstance(parsed_output, list):
-                parsed_output = []
+            # 构造结果对象
+            result_obj = {
+                "id": row_id,
+                "review": text, # 必须保存原文以便后续排序/核对
+                "quadruples": quadruples
+            }
 
-            results = []
-            for item in parsed_output:
-                if isinstance(item, dict):
-                    # 在这里进行清洗
-                    clean_dict = clean_item(item)
-                    clean_dict["id"] = row_id
-                    results.append(clean_dict)
-
-            # 如果没有提取到任何结果，生成一条默认的中性记录
-            if not results:
-                results = [
-                    {
-                        "id": row_id,
-                        "AspectTerms": "_",
-                        "OpinionTerms": "_",
-                        "Categories": "整体",
-                        "Polarities": "中性",
-                    }
-                ]
-
-            # 将结果追加到JSONL文件
+            # 实时写入 JSONL
             with open(progress_file, "a", encoding="utf-8") as f:
-                for item in results:
-                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                f.write(json.dumps(result_obj, ensure_ascii=False) + "\n")
 
-            return results
+            return result_obj
 
         except Exception as e:
-            print(f"Error processing text ID {row_id}: {text[:30]}... Error: {e}")
-            results = [
-                {
-                    "id": row_id,
-                    "AspectTerms": "_",
-                    "OpinionTerms": "_",
-                    "Categories": "整体",
-                    "Polarities": "中性",
-                }
-            ]
+            print(f"Error processing ID {row_id}: {e}")
+            # 错误时写入空结果，防止中断
+            fallback = {"id": row_id, "review": text, "quadruples": []}
             with open(progress_file, "a", encoding="utf-8") as f:
-                for item in results:
-                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
-            return results
+                f.write(json.dumps(fallback, ensure_ascii=False) + "\n")
+            return fallback
 
+# ================= 主程序 =================
 
 async def main(args):
-    if VLLM_API_BASE == "YOUR_VLLM_API_BASE" or VLLM_API_KEY == "YOUR_VLLM_API_KEY":
-        print("错误：请在脚本中设置 VLLM_API_BASE 和 VLLM_API_KEY")
-        # return 
-
+    # 路径配置
     if args.mode == "train":
         input_file = "./data/TRAIN/Train_reviews.csv"
-        output_file = "./data/TRAIN/llm_generated_labels.csv"
-        progress_file = "./data/TRAIN/llm_generated_labels.jsonl"
+        output_file = "./data/TRAIN/Result.csv"
+        progress_file = "./data/TRAIN/intermediate_results.jsonl"
     else:
         input_file = "./data/TEST/Test_reviews.csv"
-        output_file = "./data/TEST/llm_generated_results.csv"
-        progress_file = "./data/TEST/llm_generated_results.jsonl"
+        output_file = "./data/TEST/Result.csv"
+        progress_file = "./data/TEST/intermediate_results.jsonl"
 
     if not os.path.exists(input_file):
         print(f"错误：找不到输入文件 {input_file}")
         return
 
     print("正在加载数据...")
+    # 读取 CSV
     df_reviews = pd.read_csv(input_file)
+    
+    # 自动识别列名
+    text_col = "Reviews" if "Reviews" in df_reviews.columns else df_reviews.columns[1]
+    id_col = "id" if "id" in df_reviews.columns else df_reviews.columns[0]
 
+    # 恢复进度
     processed_ids = set()
     if os.path.exists(progress_file):
-        print(f"找到进度文件 {progress_file}，将从中恢复进度...")
+        print(f"从 {progress_file} 恢复进度...")
         with open(progress_file, "r", encoding="utf-8") as f:
             for line in f:
                 try:
                     data = json.loads(line)
-                    processed_ids.add(data["id"])
+                    processed_ids.add(str(data["id"]))
                 except json.JSONDecodeError:
                     continue
-        print(f"已处理 {len(processed_ids)} 条记录。")
+        print(f"已跳过 {len(processed_ids)} 条记录。")
 
-    unique_categories = [
-        "整体",
-        "价格",
-        "气味",
-        "包装",
-        "功效",
-        "使用体验",
-        "物流",
-        "服务",
-        "成分",
-        "其他",
-    ]
-
+    # 初始化客户端
     client = AsyncOpenAI(api_key=VLLM_API_KEY, base_url=VLLM_API_BASE)
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
+    # 准备任务
     tasks = []
-    text_col = "Reviews" if "Reviews" in df_reviews.columns else df_reviews.columns[1]
-    id_col = df_reviews.columns[0]
-
-    unprocessed_df = df_reviews[~df_reviews[id_col].isin(processed_ids)]
+    unprocessed_df = df_reviews[~df_reviews[id_col].astype(str).isin(processed_ids)]
 
     if unprocessed_df.empty:
         print("所有评论都已处理完毕。")
     else:
-        print(
-            f"开始使用大模型进行预测... (模式: {args.mode}, 剩余: {len(unprocessed_df)}/{len(df_reviews)})"
-        )
+        print(f"开始任务... 剩余: {len(unprocessed_df)}")
         for _, row in unprocessed_df.iterrows():
             text = str(row[text_col])
-            row_id = row[id_col]
+            row_id = str(row[id_col])
             tasks.append(
-                get_extraction(
-                    client, text, unique_categories, semaphore, row_id, progress_file
-                )
+                get_extraction(client, text, semaphore, row_id, progress_file)
             )
-
+        
+        # 执行并发
         await tqdm.gather(*tasks)
 
-    # === 生成最终CSV ===
-    print(f"正在从 {progress_file} 生成最终的CSV文件并进行格式清洗...")
-    all_results = []
+    # ================= 生成提交文件 (逻辑对齐 predict_acos.py) =================
+    print(f"生成最终提交文件: {output_file}")
+    
+    # 读取所有结果
+    id_to_preds = {}
     with open(progress_file, "r", encoding="utf-8") as f:
         for line in f:
             try:
                 line = line.strip()
                 if not line: continue
-                item = json.loads(line)
-                item = clean_item(item)
-                all_results.append(item)
-            except json.JSONDecodeError:
+                obj = json.loads(line)
+                id_to_preds[str(obj["id"])] = obj["quadruples"]
+            except:
                 continue
 
-    # ID 对齐与去重逻辑
-    id_to_results = {}
-    for item in all_results:
-        rid = str(item.get("id", ""))
-        if rid not in id_to_results:
-            id_to_results[rid] = []
-        id_to_results[rid].append(item)
-    
-    final_rows = []
+    csv_lines = []
+    # 遍历原始 DataFrame 保证顺序
     for _, row in df_reviews.iterrows():
-        original_id = row[id_col]
-        str_id = str(original_id)
+        rid = str(row[id_col])
+        quads = id_to_preds.get(rid, [])
         
-        if str_id in id_to_results:
-            seen_content = set()
-            for res in id_to_results[str_id]:
-                if res.get("OpinionTerms") == "_":
-                    pass
-                
-                content_tuple = (
-                    res.get("AspectTerms"),
-                    res.get("OpinionTerms"),
-                    res.get("Categories"),
-                    res.get("Polarities")
-                )
-                if content_tuple not in seen_content:
-                    res["id"] = original_id 
-                    final_rows.append(res)
-                    seen_content.add(content_tuple)
+        if not quads:
+            # 无观点时的占位符逻辑: id, _, _, _, _
+            csv_lines.append(f"{rid},_,_,_,_")
         else:
-            final_rows.append({
-                "id": original_id,
-                "AspectTerms": "_",
-                "OpinionTerms": "_",
-                "Categories": "整体",
-                "Polarities": "中性"
-            })
+            for q in quads:
+                # 确保 Pydantic 字段顺序
+                line = f"{rid},{q['aspect']},{q['opinion']},{q['category']},{q['polarity']}"
+                csv_lines.append(line)
 
-    df_sub = pd.DataFrame(final_rows)
-    
-    if not df_sub.empty:
-        cols_to_keep = ["id", "AspectTerms", "OpinionTerms", "Categories", "Polarities"]
-        for col in cols_to_keep:
-            if col not in df_sub.columns:
-                df_sub[col] = "_"
-        df_sub = df_sub[cols_to_keep]
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(csv_lines))
 
-        # === 新增排序逻辑 ===
-        # 尝试创建一个临时列，将ID转换为数字，以便正确排序 (1, 2, 10 而不是 1, 10, 2)
-        df_sub["_temp_sort_id"] = pd.to_numeric(df_sub["id"], errors="coerce")
-        
-        # 如果至少有一个ID能转为数字，则优先按数字ID排序，否则按字符串排序
-        if df_sub["_temp_sort_id"].notna().sum() > 0:
-            df_sub = df_sub.sort_values(by=["_temp_sort_id"])
-        else:
-            df_sub = df_sub.sort_values(by=["id"])
-            
-        # 删除临时列
-        df_sub = df_sub.drop(columns=["_temp_sort_id"])
-        # ==================
-
-    df_sub.to_csv(output_file, index=False)
-    print(f"完成！已生成: {output_file} (总行数: {len(df_sub)})")
+    print(f"完成！提交文件行数: {len(csv_lines)}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--mode",
-        type=str,
-        default="test",
-        choices=["train", "test"],
-        help="预测模式：为训练集或测试集生成结果",
-    )
+    parser.add_argument("--mode", type=str, default="train", choices=["train", "test"])
     args = parser.parse_args()
 
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
     asyncio.run(main(args))
