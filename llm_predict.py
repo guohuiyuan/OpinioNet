@@ -14,9 +14,9 @@ from pydantic import BaseModel, ValidationError, constr
 # ================= 配置区域 =================
 
 # vLLM 服务配置
-VLLM_API_BASE = "http://10.249.42.129:8863/v1"
+VLLM_API_BASE = "http://10.249.42.129:8000/v1"
 VLLM_API_KEY = "apikey"
-MODEL_NAME = "qwen3_8b"
+MODEL_NAME = "qwen3-8b"
 
 # 并发控制
 CONCURRENCY_LIMIT = 10  # 根据你的显存情况调整，vLLM通常可以承载较高并发
@@ -152,6 +152,7 @@ async def get_extraction(client, text, semaphore, row_id, progress_file):
         try:
             response = await client.chat.completions.create(
                 model=MODEL_NAME,
+                # model=client.models.list().data[0].id,
                 messages=[
                     {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
                     {"role": "user", "content": user_content}
@@ -286,7 +287,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="train", choices=["train", "test"])
+    parser.add_argument("--mode", type=str, default="test", choices=["train", "test"])
     args = parser.parse_args()
 
     if sys.platform.startswith("win"):
