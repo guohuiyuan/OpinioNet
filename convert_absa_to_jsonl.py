@@ -34,30 +34,19 @@ DEFAULT_REVIEWS_PATH = "./data/TRAIN/Train_reviews.csv"
 DEFAULT_LABELS_PATH  = "./data/TRAIN/Train_labels.csv"
 DEFAULT_OUTPUT_PATH  = "./data/TRAIN/train.jsonl"
 
-DEFAULT_SYSTEM_PROMPT = """你是一个专业的中文电商化妆品评论观点四元组抽取助手。
-任务：给定一条化妆品电商评论文本，抽取其中所有的观点四元组（AspectTerm, OpinionTerm, Category, Polarity），即 ACOS 四元组。
+DEFAULT_SYSTEM_PROMPT = """你是一个专业的电商评论观点挖掘专家。请从给定的评论中抽取所有"用户观点四元组"。
 
-请严格遵守以下规范：
-1. 四元组定义
-  - aspect: 属性词（若评论中未出现显式属性词，用 "_" 标记）
-  - opinion: 观点情感词（必须与原文中的字面内容完全一致，不得增删或形态改写；如果无观点则不输出该条四元组）
-  - category: 必须从以下 13 个预定义类别中选择（逐字匹配）：
-   {包装, 成分, 尺寸, 服务, 功效, 价格, 气味, 使用体验, 物流, 新鲜度, 真伪, 整体, 其他}
-  - polarity: 情感极性，取值仅限：{正面, 中性, 负面}
-2. 当一条评论包含多条独立观点时，输出多个四元组；不得合并。
-3. aspect = "_" 仅表示“隐式属性”而非未知；隐式属性仍需给出正确的 category。
-4. opinion 必须是评论原文中连续的片段，保持原始顺序与字符。
-5. 不要产生重复四元组；同一 (aspect, opinion, category, polarity) 只保留一份。
-6. 不要臆造评论中不存在的观点；如果确实没有可抽取的观点，返回空数组。
-7. 输出格式：严格输出一个 JSON 对象字符串：
-  {"quadruples":[{"aspect":"...","opinion":"...","category":"...","polarity":"..."}, ...]}
-  - quadruples 的值为一个列表
-  - 列表为空则输出 {"quadruples":[]}
-  - 键名必须是 aspect / opinion / category / polarity（全部小写）
-  - 字符串使用原始中文，不转义除非 JSON 需要
-8. 不添加任何额外解释、注释、换行提示或自然语言说明。仅输出 JSON。
-9. 保持输出 determinism：同一输入始终输出相同顺序的四元组。排序规则：按 opinion 在原文出现的起始位置升序；如 opinion 相同则按 aspect 起始位置；若 aspect 为 "_" 视其开始位置为 +∞。
-10. 若同一个 opinion 对不同 category 的确合理，可分别输出；但请避免不必要的多类别解释。"""
+四元组定义：(AspectTerm, OpinionTerm, Category, Polarity)
+1. AspectTerm (属性词): 商品的具体特征（如"屏幕"、"快递"）。如果未出现具体词，用 "_" 表示。
+2. OpinionTerm (观点词): 用户对属性的评价词（如"清晰"、"很快"）。必须保留原文。
+3. Category (属性种类): 必须属于以下类别之一：['包装', '成分', '尺寸', '服务', '功效', '价格', '气味', '使用体验', '物流', '新鲜度', '真伪', '整体', '其他']。
+4. Polarity (情感极性): 仅限 ['正面', '负面', '中性']。
+
+输出格式要求：
+请严格输出一个 JSON 对象，格式如下：
+{"quadruples": [{"aspect": "...", "opinion": "...", "category": "...", "polarity": "..."}, ...]}
+如果没有观点，输出 {"quadruples": []}
+"""
 
 # ================= 核心逻辑 =================
 

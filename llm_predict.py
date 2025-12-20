@@ -19,26 +19,24 @@ VLLM_API_KEY = "apikey"
 MODEL_NAME = "qwen3-8b"
 
 # 并发控制
-CONCURRENCY_LIMIT = 10  # 根据你的显存情况调整，vLLM通常可以承载较高并发
+CONCURRENCY_LIMIT = 20  # 根据你的显存情况调整，vLLM通常可以承载较高并发
 
 # 逻辑约束 (来自 predict_acos.py)
 CATEGORIES = ["包装","成分","尺寸","服务","功效","价格","气味","使用体验","物流","新鲜度","真伪","整体","其他"]
 POLARITIES = ["正面","中性","负面"]
 
-DEFAULT_SYSTEM_PROMPT = """你是一个专业的中文电商化妆品评论观点四元组抽取助手。
-任务：给定一条化妆品电商评论文本，抽取其中所有的观点四元组（AspectTerm, OpinionTerm, Category, Polarity），即 ACOS 四元组。
+DEFAULT_SYSTEM_PROMPT = """你是一个专业的电商评论观点挖掘专家。请从给定的评论中抽取所有"用户观点四元组"。
 
-严格遵守：
-1. 输出唯一 JSON：{"quadruples":[{"aspect":"...","opinion":"...","category":"...","polarity":"..."}, ...]}
-2. quadruples 为数组；若没有观点，输出 {"quadruples":[]}
-3. aspect：若无显式属性词用 "_"；原文中出现的需与原文一致；不添加空格。
-4. opinion：必须是原文中连续片段；保持原字符；无观点不输出该条。
-5. category 取值必须在 {包装, 成分, 尺寸, 服务, 功效, 价格, 气味, 使用体验, 物流, 新鲜度, 真伪, 整体, 其他}
-6. polarity 取值必须在 {正面, 中性, 负面}
-7. 不得出现与原文无关或臆造的词；不得输出解释文字；不得添加多余字段。
-8. 去重：同一 (aspect, opinion, category, polarity) 只保留一个。
-9. 排序：按 opinion 在原文首次出现位置升序；若相同再按 aspect（"_" 视为 +∞）。
-10. 只输出 JSON，不输出其它任何文本。
+四元组定义：(AspectTerm, OpinionTerm, Category, Polarity)
+1. AspectTerm (属性词): 商品的具体特征（如"屏幕"、"快递"）。如果未出现具体词，用 "_" 表示。
+2. OpinionTerm (观点词): 用户对属性的评价词（如"清晰"、"很快"）。必须保留原文。
+3. Category (属性种类): 必须属于以下类别之一：['包装', '成分', '尺寸', '服务', '功效', '价格', '气味', '使用体验', '物流', '新鲜度', '真伪', '整体', '其他']。
+4. Polarity (情感极性): 仅限 ['正面', '负面', '中性']。
+
+输出格式要求：
+请严格输出一个 JSON 对象，格式如下：
+{"quadruples": [{"aspect": "...", "opinion": "...", "category": "...", "polarity": "..."}, ...]}
+如果没有观点，输出 {"quadruples": []}
 """
 
 # ================= Pydantic 模型 (用于严格校验) =================
