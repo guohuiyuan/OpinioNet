@@ -30,9 +30,9 @@ from pathlib import Path
 # ================= 配置区域 =================
 
 # 默认文件路径（根据您的目录结构设定）
-DEFAULT_REVIEWS_PATH = "./data/TRAIN/Train_reviews.csv"
-DEFAULT_LABELS_PATH  = "./data/TRAIN/Train_labels.csv"
-DEFAULT_OUTPUT_PATH  = "./data/TRAIN/train.jsonl"
+DEFAULT_REVIEWS_PATH = "./data/SPLIT/train_reviews.csv"
+DEFAULT_LABELS_PATH  = "./data/SPLIT/train_labels.csv"
+DEFAULT_OUTPUT_PATH  = "./data/SPLIT/train.jsonl"
 
 DEFAULT_SYSTEM_PROMPT = """你是一个专业的电商评论观点挖掘专家。请从给定的评论中抽取所有"用户观点四元组"。
 

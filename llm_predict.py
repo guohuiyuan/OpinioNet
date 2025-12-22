@@ -10,13 +10,15 @@ from dataclasses import dataclass, asdict
 from openai import AsyncOpenAI
 from tqdm.asyncio import tqdm
 from pydantic import BaseModel, ValidationError, constr
+from collections import Counter # 新增导入
 
 # ================= 配置区域 =================
 
 # vLLM 服务配置
-VLLM_API_BASE = "http://10.249.42.129:8000/v1"
+VLLM_API_BASE = "http://10.249.42.129:8001/v1"
 VLLM_API_KEY = "apikey"
-MODEL_NAME = "qwen3-8b"
+# MODEL_NAME = "qwen3-8b"
+MODEL_NAME = 'glm4-9b'
 
 # 并发控制
 CONCURRENCY_LIMIT = 20  # 根据你的显存情况调整，vLLM通常可以承载较高并发
@@ -142,38 +144,76 @@ def validate_and_repair(json_str: str, original_text: str) -> List[dict]:
 
 # ================= 异步任务 =================
 
+def vote_for_best_quadruples(candidates: List[List[dict]]) -> List[dict]:
+    """
+    自洽性投票：在多个候选列表中选出最频繁出现的那个列表。
+    """
+    if not candidates:
+        return []
+    
+    # 将 list of dict 转换为可哈希的 tuple of tuples
+    # 这样才能放入 Counter 进行计数
+    hashable_candidates = []
+    for quad_list in candidates:
+        # 对列表内的四元组进行排序，确保顺序不影响投票
+        # (因为 validate_and_repair 已经排过序了，这里只需转元组)
+        temp_tuple = tuple(
+            (q['aspect'], q['opinion'], q['category'], q['polarity']) 
+            for q in quad_list
+        )
+        hashable_candidates.append(temp_tuple)
+    
+    # 统计出现频率
+    counts = Counter(hashable_candidates)
+    # 获取出现次数最多的结果
+    most_common_tuple = counts.most_common(1)[0][0]
+    
+    # 还原回 list of dict
+    final_quads = [
+        {"aspect": q[0], "opinion": q[1], "category": q[2], "polarity": q[3]}
+        for q in most_common_tuple
+    ]
+    return final_quads
+
+# ================= 异步任务：自洽性版本 =================
+
 async def get_extraction(client, text, semaphore, row_id, progress_file):
     async with semaphore:
-        # 构造用户输入
-        user_content = f"请抽取 ACOS 四元组。\n评论ID: {row_id}\n评论文本: {text}\n严格只输出一个 JSON 对象。"
+        user_content = f"请抽取 ACOS 四元组。\n评论文本: {text}\n严格只输出一个 JSON 对象。"
         
         try:
+            # 修改 1: 调整采样参数
             response = await client.chat.completions.create(
                 model=MODEL_NAME,
-                # model=client.models.list().data[0].id,
                 messages=[
                     {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
                     {"role": "user", "content": user_content}
                 ],
-                temperature=0.0,
-                max_tokens=512, # ACOS 提取不需要太长
-                response_format={"type": "json_object"} # 如果 vLLM 支持 json_object 最好，不支持也不影响
+                temperature=0.7,    # 必须 > 0 才有随机性
+                n=5,                # 采样次数，建议 3-10 之间
+                max_tokens=1024,    # n 越大，总 tokens 消耗越多，注意增加
+                response_format={"type": "json_object"}
             )
 
-            raw_content = response.choices[0].message.content
-            json_candidate = extract_json_block(raw_content)
+            # 修改 2: 处理所有候选结果
+            all_candidates = []
+            for choice in response.choices:
+                raw_content = choice.message.content
+                json_candidate = extract_json_block(raw_content)
+                # 使用你原有的 validate_and_repair 逻辑清洗每一路结果
+                quadruples = validate_and_repair(json_candidate, text)
+                all_candidates.append(quadruples)
             
-            # 使用移植过来的核心逻辑进行处理
-            quadruples = validate_and_repair(json_candidate, text)
+            # 修改 3: 投票选出最终四元组
+            final_quadruples = vote_for_best_quadruples(all_candidates)
 
-            # 构造结果对象
             result_obj = {
                 "id": row_id,
-                "review": text, # 必须保存原文以便后续排序/核对
-                "quadruples": quadruples
+                "review": text,
+                "quadruples": final_quadruples
             }
 
-            # 实时写入 JSONL
+            # 实时写入
             with open(progress_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(result_obj, ensure_ascii=False) + "\n")
 
@@ -181,7 +221,6 @@ async def get_extraction(client, text, semaphore, row_id, progress_file):
 
         except Exception as e:
             print(f"Error processing ID {row_id}: {e}")
-            # 错误时写入空结果，防止中断
             fallback = {"id": row_id, "review": text, "quadruples": []}
             with open(progress_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(fallback, ensure_ascii=False) + "\n")
