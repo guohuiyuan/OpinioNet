@@ -1,6 +1,8 @@
 import pandas as pd
 import argparse
 import os
+import json
+import re
 
 def f1_score(p, g, s):
     pr = s / p if p > 0 else 0
@@ -9,15 +11,11 @@ def f1_score(p, g, s):
     return f1, pr, rc
 
 def load_data(file_path, is_prediction=False):
-    """
-    加载数据并统一格式
-    is_prediction: 如果是预测文件，通常没有表头，需要手动赋予列名
-    """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"文件未找到: {file_path}")
 
     if is_prediction:
-        # 预测结果通常无表头，按标准顺序指定
+        # 对应 Result.csv 格式: rid,aspect,opinion,category,polarity
         df = pd.read_csv(
             file_path, 
             header=None, 
@@ -25,107 +23,102 @@ def load_data(file_path, is_prediction=False):
             dtype=str
         )
     else:
-        # 真值文件通常有表头
         df = pd.read_csv(file_path, dtype=str)
-        # 兼容可能的列名差异（单数/复数）
         rename_map = {
-            "AspectTerm": "AspectTerms",
-            "OpinionTerm": "OpinionTerms", 
-            "Category": "Categories",
-            "Polarity": "Polarities",
-            "ReviewID": "id",
-            "ID": "id"
+            "AspectTerm": "AspectTerms", "OpinionTerm": "OpinionTerms", 
+            "Category": "Categories", "Polarity": "Polarities",
+            "ReviewID": "id", "ID": "id", "text": "review", "sentence": "review"
         }
         df = df.rename(columns=rename_map)
 
-    # 填充空值为 "_"
     df = df.fillna("_")
-    
-    # 确保 ID 是字符串类型，防止 int 和 str 无法匹配
     df["id"] = df["id"].astype(str).str.strip()
-    
     return df
 
 def get_valid_quadruples(group_df):
-    """
-    从 DataFrame 分组中提取有效的四元组集合。
-    过滤掉 OpinionTerms 为 "_" 的行（即无观点的占位行）。
-    """
     quad_set = set()
     if group_df is None or group_df.empty:
         return quad_set
-
     for _, row in group_df.iterrows():
-        aspect = str(row.get("AspectTerms", "_")).strip()
-        opinion = str(row.get("OpinionTerms", "_")).strip()
-        category = str(row.get("Categories", "_")).strip()
-        polarity = str(row.get("Polarities", "_")).strip()
-
-        # 核心逻辑：如果 Opinion 是 "_"，则视为无效观点，不参与 F1 计算
-        # (即：模型预测“无观点”且真值也是“无观点”时，既不加分也不扣分，直接忽略)
-        if opinion == "_" or opinion == "":
-            continue
-
+        aspect, opinion = str(row.get("AspectTerms", "_")).strip(), str(row.get("OpinionTerms", "_")).strip()
+        category, polarity = str(row.get("Categories", "_")).strip(), str(row.get("Polarities", "_")).strip()
+        if opinion == "_" or opinion == "": continue
         quad_set.add((aspect, opinion, category, polarity))
-    
     return quad_set
 
-def evaluate_results(gt_df, pred_df):
+def evaluate_results(gt_df, pred_df, id_to_text):
     p, g, s = 0, 0, 0
-
-    # 按 ID 分组
+    error_records = []
+    
     gt_groups = {str(k): v for k, v in gt_df.groupby("id")}
     pred_groups = {str(k): v for k, v in pred_df.groupby("id")}
-
-    # 获取所有涉及的 ID
-    all_ids = set(gt_groups.keys()) | set(pred_groups.keys())
+    
+    # 将所有 ID 按顺序排列
+    # 尝试按数字排序，如果不行则按字符串排序
+    all_ids = list(set(gt_groups.keys()) | set(pred_groups.keys()))
+    all_ids.sort(key=lambda x: int(x) if x.isdigit() else x)
 
     for review_id in all_ids:
-        gt_group = gt_groups.get(review_id)
-        pred_group = pred_groups.get(review_id)
+        gt_group, pred_group = gt_groups.get(review_id), pred_groups.get(review_id)
+        
+        # 关联原始评论文本
+        review_text = id_to_text.get(review_id, "")
+        if not review_text and gt_group is not None and "review" in gt_group.columns:
+            review_text = str(gt_group["review"].iloc[0])
 
-        # 获取清洗后的四元组集合
-        gt_set = get_valid_quadruples(gt_group)
-        pred_set = get_valid_quadruples(pred_group)
-
-        # 统计数量
-        # p (Predict): 预测出的有效观点总数
-        p += len(pred_set)
-        # g (Ground Truth): 真实的有效观点总数
-        g += len(gt_set)
-        # s (Success): 预测正确的数量（交集）
+        gt_set, pred_set = get_valid_quadruples(gt_group), get_valid_quadruples(pred_group)
+        p, g = p + len(pred_set), g + len(gt_set)
         s += len(gt_set.intersection(pred_set))
 
-    f1, pr, rc = f1_score(p, g, s)
-    return f1, pr, rc, p, g, s
+        if gt_set != pred_set:
+            error_records.append({
+                "id": review_id,
+                "review": review_text,
+                "missing": [list(item) for item in sorted(list(gt_set - pred_set))],
+                "extra": [list(item) for item in sorted(list(pred_set - gt_set))],
+                "ground_truth": [list(item) for item in sorted(list(gt_set))],
+                "predictions": [list(item) for item in sorted(list(pred_set))]
+            })
+    return f1_score(p, g, s), p, g, s, error_records
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ACOS 评测脚本")
-    parser.add_argument("--gt", type=str, default="./data/SPLIT/val_labels.csv", help="真实标签文件路径 (带表头)")
-    parser.add_argument("--pred", type=str, default="./data/VALID/Result.csv", help="预测结果文件路径 (无表头)")
+    parser = argparse.ArgumentParser(description="ACOS 评测工具")
+    parser.add_argument("--gt", type=str, default="./data/SPLIT/val_labels.csv", help="标签文件")
+    parser.add_argument("--pred", type=str, default="./data/VALID/Result.csv", help="预测结果")
+    parser.add_argument("--text_file", type=str, default="./data/SPLIT/val_reviews.csv", help="评论文本")
+    parser.add_argument("--error_file", type=str, default="error_results.json", help="错误结果路径")
     args = parser.parse_args()
 
-    print(f"正在评估...")
-    print(f"  真实文件: {args.gt}")
-    print(f"  预测文件: {args.pred}")
+    id_map = {}
+    if os.path.exists(args.text_file):
+        tdf = pd.read_csv(args.text_file, dtype=str)
+        # 兼容 llm_predict.py 中的列名逻辑
+        t_col = "Reviews" if "Reviews" in tdf.columns else tdf.columns[1]
+        i_col = "id" if "id" in tdf.columns else tdf.columns[0]
+        id_map = dict(zip(tdf[i_col].astype(str).str.strip(), tdf[t_col]))
 
     try:
-        # 加载数据
-        gt_df = load_data(args.gt, is_prediction=False)
-        pred_df = load_data(args.pred, is_prediction=True) # 这里设置为 True，处理无表头的情况
-
-        # 运行评估
-        f1, pr, rc, p, g, s = evaluate_results(gt_df, pred_df)
+        gt_df, pred_df = load_data(args.gt), load_data(args.pred, True)
+        (f1, pr, rc), p, g, s, errors = evaluate_results(gt_df, pred_df, id_map)
 
         print("-" * 30)
-        print("评估结果 (Micro-F1):")
-        print(f"  Precision (精确率): {pr:.4f}  (Correct: {s} / Predicted: {p})")
-        print(f"  Recall    (召回率): {rc:.4f}  (Correct: {s} / Gold: {g})")
-        print(f"  F1 Score  (F1分数): {f1:.4f}")
+        print(f"评估结果:")
+        print(f"  Precision: {pr:.4f}")
+        print(f"  Recall:    {rc:.4f}")
+        print(f"  F1 Score:  {f1:.4f}")
         print("-" * 30)
+
+        # 序列化并压缩内层数组
+        full_json = json.dumps(errors, ensure_ascii=False, indent=4)
+        compact_json = re.sub(r'\[\s+((?:"[^"]*",?\s*)+)\s+\]', 
+                             lambda m: "[" + ", ".join([s.strip() for s in m.group(1).split(",")]) + "]", 
+                             full_json)
+        
+        with open(args.error_file, "w", encoding="utf-8") as f:
+            f.write(compact_json)
+        
+        print(f"已按顺序将 {len(errors)} 条错误导出至: {args.error_file}")
 
     except Exception as e:
-        print(f"发生错误: {e}")
-        # 打印更详细的错误堆栈以便调试
         import traceback
         traceback.print_exc()

@@ -234,7 +234,7 @@ async def main(args):
         input_file = "./data/SPLIT/train_reviews.csv"
         output_file = "./data/TRAIN/Result.csv"
         progress_file = "./data/TRAIN/intermediate_results.jsonl"
-    if args.mode == "valid":
+    if args.mode == "val":
         input_file = "./data/SPLIT/val_reviews.csv"
         output_file = "./data/VALID/Result.csv"
         progress_file = "./data/VALID/intermediate_results.jsonl"
@@ -328,7 +328,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="valid", choices=["train", "valid", "test"])
+    parser.add_argument("--mode", type=str, default="train", choices=["train", "val", "test"])
     args = parser.parse_args()
 
     if sys.platform.startswith("win"):
