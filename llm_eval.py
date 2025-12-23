@@ -101,8 +101,8 @@ def evaluate_results(gt_df, pred_df):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ACOS 评测脚本")
-    parser.add_argument("--gt", type=str, default="./data/TRAIN/Train_labels.csv", help="真实标签文件路径 (带表头)")
-    parser.add_argument("--pred", type=str, default="./data/TRAIN/Result.csv", help="预测结果文件路径 (无表头)")
+    parser.add_argument("--gt", type=str, default="./data/SPLIT/val_labels.csv", help="真实标签文件路径 (带表头)")
+    parser.add_argument("--pred", type=str, default="./data/VALID/Result.csv", help="预测结果文件路径 (无表头)")
     args = parser.parse_args()
 
     print(f"正在评估...")

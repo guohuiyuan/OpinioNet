@@ -15,13 +15,13 @@ from collections import Counter # 新增导入
 # ================= 配置区域 =================
 
 # vLLM 服务配置
-VLLM_API_BASE = "http://10.249.42.129:8001/v1"
+VLLM_API_BASE = "http://10.249.42.129:8000/v1"
 VLLM_API_KEY = "apikey"
 # MODEL_NAME = "qwen3-8b"
-MODEL_NAME = 'glm4-9b'
+MODEL_NAME = 'qwen3-4b'
 
 # 并发控制
-CONCURRENCY_LIMIT = 20  # 根据你的显存情况调整，vLLM通常可以承载较高并发
+CONCURRENCY_LIMIT = 30  # 根据你的显存情况调整，vLLM通常可以承载较高并发
 
 # 逻辑约束 (来自 predict_acos.py)
 CATEGORIES = ["包装","成分","尺寸","服务","功效","价格","气味","使用体验","物流","新鲜度","真伪","整体","其他"]
@@ -231,9 +231,13 @@ async def get_extraction(client, text, semaphore, row_id, progress_file):
 async def main(args):
     # 路径配置
     if args.mode == "train":
-        input_file = "./data/TRAIN/Train_reviews.csv"
+        input_file = "./data/SPLIT/train_reviews.csv"
         output_file = "./data/TRAIN/Result.csv"
         progress_file = "./data/TRAIN/intermediate_results.jsonl"
+    if args.mode == "valid":
+        input_file = "./data/SPLIT/val_reviews.csv"
+        output_file = "./data/VALID/Result.csv"
+        progress_file = "./data/VALID/intermediate_results.jsonl"
     else:
         input_file = "./data/TEST/Test_reviews.csv"
         output_file = "./data/TEST/Result.csv"
@@ -324,7 +328,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="test", choices=["train", "test"])
+    parser.add_argument("--mode", type=str, default="valid", choices=["train", "valid", "test"])
     args = parser.parse_args()
 
     if sys.platform.startswith("win"):
