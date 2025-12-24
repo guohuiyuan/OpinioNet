@@ -18,7 +18,7 @@ from collections import Counter # 新增导入
 VLLM_API_BASE = "http://10.249.42.129:8000/v1"
 VLLM_API_KEY = "apikey"
 # MODEL_NAME = "qwen3-8b"
-MODEL_NAME = 'qwen3-4b'
+MODEL_NAME = 'qwen3-14b'
 
 # 并发控制
 CONCURRENCY_LIMIT = 30  # 根据你的显存情况调整，vLLM通常可以承载较高并发
@@ -328,7 +328,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="train", choices=["train", "val", "test"])
+    parser.add_argument("--mode", type=str, default="val", choices=["train", "val", "test"])
     args = parser.parse_args()
 
     if sys.platform.startswith("win"):

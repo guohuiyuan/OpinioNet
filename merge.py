@@ -1,7 +1,7 @@
 import pandas as pd
-df_1 = pd.read_csv("data/TEST/qwen3_8b_full_Result.csv",header=None,names=['id', 'AspectTerms', 'OpinionTerms', 'Categories', 'Polarities'])
-df_2 = pd.read_csv("data/TEST/qwen3_4b_full_Result.csv",header=None,names=['id', 'AspectTerms', 'OpinionTerms', 'Categories', 'Polarities'])
-df_3 = pd.read_csv("data/TEST/qwen3_8b_lora_Result.csv",header=None,names=['id', 'AspectTerms', 'OpinionTerms', 'Categories', 'Polarities'])
+df_2 = pd.read_csv("data/TEST/qwen3_8b_full_Result7983.csv",header=None,names=['id', 'AspectTerms', 'OpinionTerms', 'Categories', 'Polarities'])
+df_1 = pd.read_csv("data/TEST/qwen3_8b_full_Result7963.csv",header=None,names=['id', 'AspectTerms', 'OpinionTerms', 'Categories', 'Polarities'])
+df_3 = pd.read_csv("data/TEST/qwen3_4b_full_Result7924.csv",header=None,names=['id', 'AspectTerms', 'OpinionTerms', 'Categories', 'Polarities'])
 candidate_list = []
 idx_dict = {}
 for index, row in df_1.iterrows():

@@ -71,3 +71,100 @@
 
 screen -L -Logfile test.log -dmS test bash -c "/new_disk/med_group/ghy/miniconda3/bin/python /new_disk/med_group/ghy/code/OpinioNet/llm_predict.py --mode test"
 screen -L -Logfile train.log -dmS train bash -c "/new_disk/med_group/ghy/miniconda3/bin/python /new_disk/med_group/ghy/code/OpinioNet/llm_predict.py --mode train"
+
+# qwen3-4b微调结果
+## 1
+num_train_epochs  3
+LEARNING_RATE 1e-05
+finetuning_type full
+packing True
+warmup_steps 0
+score 0.7770
+
+
+## 2
+num_train_epochs  4
+LEARNING_RATE 1e-05
+finetuning_type full
+packing True
+warmup_steps 0
+score 0.7773
+
+
+## 3
+num_train_epochs  3
+LEARNING_RATE 1e-05
+finetuning_type full
+packing False
+warmup_steps 0
+score 0.7995 
+truth_score 0.7924
+
+## 4
+num_train_epochs  3
+LEARNING_RATE 1e-05
+finetuning_type full
+packing False
+warmup_steps 0
+weight_decay 0.1
+score 0.7941
+truth_score 0.7884
+
+## 5
+num_train_epochs  3
+LEARNING_RATE 1e-05
+finetuning_type full
+packing False
+warmup_steps 0
+weight_decay 0.1
+warmup_ratio 0.1
+score 0.8012
+truth_score 0.7908
+
+## 6
+num_train_epochs  3
+LEARNING_RATE 1e-05
+finetuning_type full
+packing False
+warmup_steps 0
+warmup_ratio 0.1
+score 0.7888
+truth_score 0.7908
+
+## 6
+num_train_epochs  3
+LEARNING_RATE 6e-06
+finetuning_type full
+packing False
+warmup_steps 0
+score 0.7955
+
+## 7
+num_train_epochs  3
+LEARNING_RATE 6e-06
+finetuning_type full
+packing False
+warmup_steps 0
+weight_decay 0.1
+warmup_ratio 0.1
+score 0.7886
+
+# qwen3-8b
+num_train_epochs  3
+LEARNING_RATE 6e-06
+finetuning_type full
+packing False
+warmup_steps 0
+weight_decay 0.1
+warmup_ratio 0.1
+score 0.8062
+truth_score 0.7983
+
+# qwen3-14b
+num_train_epochs  3
+LEARNING_RATE 1e-04
+finetuning_type lora
+packing False
+weight_decay 0.1
+warmup_ratio 0.1
+score 0.3020
